@@ -170,7 +170,7 @@ func (server HTTPServer) overviewEndpoint(writer http.ResponseWriter, request *h
 		return
 	}
 
-	clusters, err := server.readClusterIDsForOrgID(orgID)
+	clusters, err := server.getClusterInfo(orgID)
 	if err != nil {
 		if _, ok := err.(*url.Error); ok {
 			log.Error().Err(err).Msg("Aggregator service is unavailable")
@@ -210,10 +210,50 @@ func (server HTTPServer) overviewEndpoint(writer http.ResponseWriter, request *h
 	}
 }
 
+// overviewEndpointWithClusterIDs returns a map with an overview of number of clusters hit by rules
+func (server HTTPServer) overviewEndpointWithClusterIDs(writer http.ResponseWriter, request *http.Request) {
+	orgID, userID, err := server.readOrgIDAndUserIDFromToken(writer, request)
+	if err != nil {
+		handleServerError(writer, err)
+		return
+	}
+
+	// get reports for the cluster list in body
+	log.Info().Msg("Retrieving reports for clusters to generate org_overview")
+	aggregatorResponse, ok := server.fetchAggregatorReportsUsingRequestBodyClusterList(writer, request)
+	if !ok {
+		// errors already handled
+		return
+	}
+
+	//TODO call server.getClusterInfo to get managed clusters
+
+	// retrieve rule acknowledgements (disable/enable)
+	acks, err := server.readListOfAckedRules(orgID, userID)
+	if err != nil {
+		log.Error().Err(err).Msg(ackedRulesError)
+		// server error has been handled already
+		return
+	}
+	orgWideDisabledRules := generateRuleAckMap(acks)
+
+	r, err := generateOrgOverview(aggregatorResponse, orgWideDisabledRules) //TODO pass clusterInfoList
+
+	if err != nil {
+		handleServerError(writer, err)
+		return
+	}
+
+	if err = responses.SendOK(writer, responses.BuildOkResponseWithData("overview", r)); err != nil {
+		handleServerError(writer, err)
+		return
+	}
+}
+
 // getOverviewForClusters gets the overview for all clusters
 func (server HTTPServer) getOverviewForClusters(
 	writer http.ResponseWriter,
-	clusters []types.ClusterName,
+	clusters []sptypes.ClusterInfo,
 	authToken *types.Identity,
 	orgWideDisabledRules map[types.RuleID]bool,
 ) (sptypes.OrgOverviewResponse, error) {
@@ -221,20 +261,27 @@ func (server HTTPServer) getOverviewForClusters(
 	hitsByTotalRisk := make(map[int]int)
 	hitsByTags := make(map[string]int)
 
-	for _, clusterID := range clusters {
-		overview, err := server.getOverviewPerCluster(writer, clusterID, authToken, orgWideDisabledRules)
+	for _, cluster := range clusters {
+		overview, err := server.getOverviewPerCluster(writer, cluster.ID, authToken, orgWideDisabledRules)
 		if err != nil {
 			if _, ok := err.(*content.RuleContentDirectoryTimeoutError); ok {
 				return sptypes.OrgOverviewResponse{}, err
 			}
-			log.Error().Err(err).Msgf("Problem handling report for cluster %s.", clusterID)
+			log.Error().Err(err).Msgf("Problem handling report for cluster %s.", cluster.ID)
 			continue
 		}
 
 		if overview == nil {
-			log.Error().Msgf("Overview for cluster %v is empty. Skipping.", clusterID)
+			log.Error().Msgf("Overview for cluster %v is empty. Skipping.", cluster.ID)
 			continue
 		}
+		// TODO count cluster hits as follows
+		// for id in cluster_ids:
+		// 	if the id is id of the managed cluster then
+		//     count only osd_eligible hitting rules
+		// 	else
+		//     count all the hitting rules
+		// call server.readOSDEligible to get osd_eligible hitting rules?
 
 		clustersHits++
 		for _, totalRisk := range overview.TotalRisksHit {
@@ -252,44 +299,6 @@ func (server HTTPServer) getOverviewForClusters(
 		ClustersHitByTag:       hitsByTags,
 	}
 	return r, nil
-}
-
-// overviewEndpointWithClusterIDs returns a map with an overview of number of clusters hit by rules
-func (server HTTPServer) overviewEndpointWithClusterIDs(writer http.ResponseWriter, request *http.Request) {
-	orgID, userID, err := server.readOrgIDAndUserIDFromToken(writer, request)
-	if err != nil {
-		handleServerError(writer, err)
-		return
-	}
-
-	// get reports for the cluster list in body
-	log.Info().Msg("Retrieving reports for clusters to generate org_overview")
-	aggregatorResponse, ok := server.fetchAggregatorReportsUsingRequestBodyClusterList(writer, request)
-	if !ok {
-		// errors already handled
-		return
-	}
-
-	// retrieve rule acknowledgements (disable/enable)
-	acks, err := server.readListOfAckedRules(orgID, userID)
-	if err != nil {
-		log.Error().Err(err).Msg(ackedRulesError)
-		// server error has been handled already
-		return
-	}
-	orgWideDisabledRules := generateRuleAckMap(acks)
-
-	r, err := generateOrgOverview(aggregatorResponse, orgWideDisabledRules)
-
-	if err != nil {
-		handleServerError(writer, err)
-		return
-	}
-
-	if err = responses.SendOK(writer, responses.BuildOkResponseWithData("overview", r)); err != nil {
-		handleServerError(writer, err)
-		return
-	}
 }
 
 // generateOrgOverview generates an OrgOverviewResponse from the aggregator's response
@@ -440,7 +449,7 @@ func readInfoAPIEndpoint(url string) (map[string]string, error) {
 
 	// check the status code
 	if response.StatusCode != http.StatusOK {
-		err = fmt.Errorf("Improper status code %d", response.StatusCode)
+		err = fmt.Errorf("improper status code %d", response.StatusCode)
 		return nil, err
 	}
 
@@ -454,7 +463,7 @@ func readInfoAPIEndpoint(url string) (map[string]string, error) {
 
 	body, err := ioutil.ReadAll(response.Body)
 	if err != nil {
-		err = errors.New("Problem reading response from /info endpoint")
+		err = errors.New("problem reading response from /info endpoint")
 		return nil, err
 	}
 
@@ -463,7 +472,7 @@ func readInfoAPIEndpoint(url string) (map[string]string, error) {
 
 	err = json.Unmarshal(body, &decoded)
 	if err != nil {
-		err = errors.New("Problem unmarshalling JSON response from /info endpoint")
+		err = errors.New("problem unmarshalling JSON response from /info endpoint")
 		return nil, err
 	}
 

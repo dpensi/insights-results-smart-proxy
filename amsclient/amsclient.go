@@ -31,8 +31,8 @@ const (
 	defaultPageSize = 500
 
 	// strings for logging and errors
-	orgNoInternalID     = "Organization doesn't have proper internal ID"
-	orgMoreInternalOrgs = "More than one internal organization for the given orgID"
+	orgNoInternalID     = "organization doesn't have proper internal ID"
+	orgMoreInternalOrgs = "more than one internal organization for the given orgID"
 	orgIDTag            = "OrgID"
 	clusterIDTag        = "ClusterID"
 
@@ -89,8 +89,8 @@ func NewAMSClientWithTransport(conf Configuration, transport http.RoundTripper) 
 	} else if conf.Token != "" {
 		builder = builder.Tokens(conf.Token)
 	} else {
-		err := fmt.Errorf("No credentials provided. Cannot create the API client")
-		log.Error().Err(err).Msg("Cannot create the connection builder")
+		err := fmt.Errorf("no credentials provided. Cannot create the API client")
+		log.Error().Err(err).Msg("cannot create the connection builder")
 		return nil, err
 	}
 
@@ -245,9 +245,18 @@ func (c *amsClientImpl) executeSubscriptionListRequest(
 			}
 
 			clusterID := types.ClusterName(clusterIDstr)
+
+			managed, ok := item.GetManaged()
+			if !ok {
+				log.Warn().Msgf("no 'managed' attribute for cluster: %v", clusterID)
+				log.Warn().Msg("setting false by default")
+				managed = false
+			}
+
 			clusterInfoList = append(clusterInfoList, types.ClusterInfo{
 				ID:          clusterID,
 				DisplayName: displayName,
+				Managed:     managed,
 			})
 		}
 	}

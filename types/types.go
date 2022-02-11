@@ -249,6 +249,7 @@ type InfoResponse struct {
 type ClusterInfo struct {
 	ID          ClusterName
 	DisplayName string
+	Managed     bool
 }
 
 // ClustersDetailData is the inner data structure for /clusters_detail

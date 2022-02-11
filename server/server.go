@@ -370,6 +370,18 @@ func (server HTTPServer) getClusterInfoFromAMS(orgID ctypes.OrgID) (
 	return
 }
 
+func (server HTTPServer) getClusterInfo(orgID ctypes.OrgID) ([]types.ClusterInfo, error) {
+	if server.amsClient != nil {
+		clusterInfoList, err := server.getClusterInfoFromAMS(orgID)
+		if err != nil {
+			log.Error().Err(err).Int(orgIDTag, int(orgID)).Msg("Error retrieving cluster IDs from AMS API")
+			return []types.ClusterInfo{}, err
+		}
+		return clusterInfoList, nil
+	}
+	return nil, fmt.Errorf("no AMS client available")
+}
+
 // readClusterIDsForOrgID reads the list of clusters for a given
 // organization from aggregator
 func (server HTTPServer) readClusterIDsForOrgID(orgID ctypes.OrgID) ([]ctypes.ClusterName, error) {
@@ -887,11 +899,9 @@ func (server HTTPServer) buildReportEndpointResponse(
 	visibleRules, noContentRulesCnt, disabledRulesCnt, err := filterRulesInResponse(aggregatorResponse.Report, osdFlag, includeDisabled, systemWideRuleDisables)
 	log.Info().Msgf("Cluster ID: %v; visible rules %d, no content rules %d, disabled rules %d", clusterID, len(visibleRules), noContentRulesCnt, disabledRulesCnt)
 
-	if err != nil {
-		if _, ok := err.(*content.RuleContentDirectoryTimeoutError); ok {
-			handleServerError(writer, err)
-			return nil, 0, err
-		}
+	if _, ok := err.(*content.RuleContentDirectoryTimeoutError); ok {
+		handleServerError(writer, err)
+		return nil, 0, err
 	}
 
 	rulesCount = server.getRuleCount(visibleRules, noContentRulesCnt, disabledRulesCnt, clusterID)
@@ -1086,12 +1096,10 @@ func (server HTTPServer) singleRuleEndpoint(writer http.ResponseWriter, request 
 }
 
 func handleFetchRuleContentError(writer http.ResponseWriter, err error, filtered bool) {
-	if err != nil {
-		if _, ok := err.(*content.RuleContentDirectoryTimeoutError); ok {
-			log.Error().Err(err)
-			handleServerError(writer, err)
-			return
-		}
+	if _, ok := err.(*content.RuleContentDirectoryTimeoutError); ok {
+		log.Error().Err(err)
+		handleServerError(writer, err)
+		return
 	}
 	err = responses.SendNotFound(writer, "Rule was not found")
 	if err != nil {
